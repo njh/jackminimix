@@ -28,40 +28,51 @@
 #include <unistd.h>
 
 #include <jack/jack.h>
+#include <lo/lo.h>
 #include <getopt.h>
 #include "config.h"
 
 
-jack_port_t *input_port = NULL;
+typedef struct {
+	float current_db;
+	float desired_db;
+	jack_port_t *left_port;
+	jack_port_t *right_port;
+} mm_channel_t;
+
+
+jack_port_t *port_out_left = NULL;
+jack_port_t *port_out_right = NULL;
 jack_client_t *client = NULL;
 
+int verbose = 0;
+int running = 1;
+int channel_count = 0;
+mm_channel_t *channels = NULL;
 
 
-/* Read and reset the recent peak sample */
-static float read_peak()
+
+static int quit_handler(const char *path, const char *types, lo_arg **argv, int argc,
+		 void *data, void *user_data)
 {
-	float tmp = peak;
-	peak = 0.0f;
+    printf("Received quit OSC message.\n");
+    running = 0;
 
-	return tmp;
+    return 0;
 }
 
-
-/* Callback called by JACK when audio is available.
-   Stores value of peak sample */
-static int process_peak(jack_nframes_t nframes, void *arg)
+static int process_audio(jack_nframes_t nframes, void *arg)
 {
 	jack_default_audio_sample_t *in;
-	unsigned int i;
 
-
-	/* just incase the port isn't registered yet */
+/*
+	// just incase the port isn't registered yet
 	if (input_port == NULL) {
 		return 0;
 	}
 
 
-	/* get the audio samples, and find the peak sample */
+	// get the audio samples, and find the peak sample
 	in = (jack_default_audio_sample_t *) jack_port_get_buffer(input_port, nframes);
 	for (i = 0; i < nframes; i++) {
 		const float s = fabs(in[i]);
@@ -69,236 +80,161 @@ static int process_peak(jack_nframes_t nframes, void *arg)
 			peak = s;
 		}
 	}
-
+*/
 
 	return 0;
 }
 
-
-
-/* Close down JACK when exiting */
-static void cleanup()
+static void mm_error(int num, const char *msg, const char *path)
 {
-	const char **all_ports;
-	unsigned int i;
-
-	fprintf(stderr,"cleanup()\n");
-
-	if (input_port != NULL ) {
-
-		all_ports = jack_port_get_all_connections(client, input_port);
-
-		for (i=0; all_ports && all_ports[i]; i++) {
-			jack_disconnect(client, all_ports[i], jack_port_name(input_port));
-		}
-	}
-
-	/* Leave the jack graph */
-	jack_client_close(client);
-
+    printf("mini mixer error %d in path %s: %s\n", num, path, msg);
 }
 
-
-/* Connect the chosen port to ours */
-static void connect_port(jack_client_t *client, char *port_name)
-{
-	jack_port_t *port;
-
-	// Get the port we are connecting to
-	port = jack_port_by_name(client, port_name);
-	if (port == NULL) {
-		fprintf(stderr, "Can't find port '%s'\n", port_name);
-		exit(1);
-	}
-
-	// Connect the port to our input port
-	printf("Connecting '%s' to '%s'...\n", jack_port_name(port), jack_port_name(input_port));
-	if (jack_connect(client, jack_port_name(port), jack_port_name(input_port))) {
-		fprintf(stderr, "Cannot connect port '%s' to '%s'\n", jack_port_name(port), jack_port_name(input_port));
-		exit(1);
-	}
-}
-
-
-/* Sleep for a fraction of a second */
-static int fsleep( float secs )
-{
-
-//#ifdef HAVE_USLEEP
-	return usleep( secs * 1000000 );
-//#endif
-}
 
 
 /* Display how to use this program */
 static int usage( const char * progname )
 {
-	fprintf(stderr, "jackmeter version %s\n\n", VERSION);
-	fprintf(stderr, "Usage %s [-f freqency] [-r ref-level] [-w width] [<port>]\n\n", progname);
-	fprintf(stderr, "where  freqency is how often to update the meter per second [8]\n");
-	fprintf(stderr, "       ref-level is the reference signal level for 0dB on the meter\n");
-	fprintf(stderr, "       width is how wide to make the meter [79]\n");
-	fprintf(stderr, "       port is the JACK port to monitor\n");
+	fprintf(stderr, "jack_mini_mixer version %s\n\n", VERSION);
+	fprintf(stderr, "Usage %s -c <channel count> [-p <osc_port>]\n\n", progname);
 	exit(1);
 }
 
-
-void display_scale( int width )
+static void setup_osc( const char * port ) 
 {
-	int i=0;
-	const int marks[11] = { 0, -5, -10, -15, -20, -25, -30, -35, -40, -50, -60 };
-	char *scale = malloc( width+1 );
-	char *line = malloc( width+1 );
-	
-	
-	// Initialise the scale
-	for(i=0; i<width; i++) { scale[i] = ' '; line[i]='_'; }
-	scale[width] = 0;
-	line[width] = 0;
-	
-	
-	// 'draw' on each of the db marks
-	for(i=0; i < 11; i++) {
-		char mark[5];
-		int pos = iec_scale( marks[i], width )-1;
-		int spos, slen;
-		
-		// Create string of the db value
-		snprintf(mark, 4, "%d", marks[i]);
-		
-		// Position the label string
-		slen = strlen(mark);
-		spos = pos-(slen/2);
-		if (spos<0) spos=0;
-		if (spos+strlen(mark)>width) spos=width-slen;
-		memcpy( scale+spos, mark, slen );
-		
-		// Position little marker
-		line[pos] = '|';
-	}
-	
-	// Print it to screen
-	printf("%s\n", scale);
-	printf("%s\n", line);
-	free(scale);
-	free(line);
+	// Create OSC server
+    lo_server_thread st = lo_server_thread_new(port, mm_error);
+
+	// add method that will match the path /quit with no args
+    lo_server_thread_add_method(st, "/quit", "", quit_handler, NULL);
+
+	// Set OSC Server running
+    lo_server_thread_start(st);
 }
 
-
-void display_meter( float peak, int width )
+static void setup_jack( const char * client_name ) 
 {
-	float db = 20.0f * log10f(peak * bias);
-	int size = iec_scale( db, width );
-	int i;
-	
-	if (size > dpeak) {
-		dpeak = size;
-		dtime = 0;
-	} else if (dtime++ > decay_len) {
-		dpeak = size;
+	// Register with Jack
+	if ((client = jack_client_new(client_name)) == 0) {
+		fprintf(stderr, "JACK server not running?\n");
+		exit(1);
+	}
+	if (verbose) printf("Registering as %s.\n", client_name);
+
+	// Create our pair of output ports
+	if (!(port_out_left = jack_port_register(client, "out_left", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0))) {
+		fprintf(stderr, "Cannot register output port 'out_left'.\n");
+		exit(1);
 	}
 	
-	printf("\r");
-	
-	for(i=0; i<size-1; i++) { printf("#"); }
-	
-	if (dpeak==size) {
-		printf("I");
-	} else {
-		printf("#");
-		for(i=0; i<dpeak-size-1; i++) { printf(" "); }
-		printf("I");
+	if (!(port_out_right = jack_port_register(client, "out_right", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0))) {
+		fprintf(stderr, "Cannot register output port 'out_right'.\n");
+		exit(1);
 	}
+
+	// Register the peak audio callback
+	jack_set_process_callback(client, process_audio, 0);
+
+}
+
+static jack_port_t* create_input_port( const char* side, int chan_num )
+{
+	char port_name[255];
+	jack_port_t *port;
 	
-	for(i=0; i<width-dpeak; i++) { printf(" "); }
+	snprintf( port_name, 255, "in%d_%s", chan_num, side );
+	if (!(port = jack_port_register(client, port_name, JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0))) {
+		fprintf(stderr, "Cannot register input port '%s'.\n", port_name);
+		exit(1);
+	}
+	if (verbose) printf("Registered port %s\n", port_name);
+	
+	return port;
+}
+
+static mm_channel_t* setup_channels( int chan_count ) 
+{
+	mm_channel_t* channels = (mm_channel_t*)malloc( 
+			sizeof(mm_channel_t) * chan_count);
+	int c;
+	
+	// Initialise each of the channels
+	for(c=1; c<=chan_count; c++) {
+		
+		// Faders start faded down
+		channels[c].current_db=0;
+		channels[c].desired_db=0;
+		
+		// Create the JACK input ports
+		channels[c].left_port = create_input_port( "left", c );
+		channels[c].right_port = create_input_port( "right", c );
+	}
+			
+	return channels;
 }
 
 
 int main(int argc, char *argv[])
 {
-	int console_width = 79;
-	char client_name[255];
-	int running = 1;
-	float ref_lev;
-	int rate = 8;
 	int opt;
-
-	// Make STDOUT unbuffered
-	setbuf(stdout, NULL);
-
-	while ((opt = getopt(argc, argv, "w:f:r:h")) != -1) {
+	char* client_name = "minimixer";
+	char* osc_port = "4444";
+	
+	while ((opt = getopt(argc, argv, "c:p:vh")) != -1) {
 		switch (opt) {
-			case 'r':
-				ref_lev = atof(optarg);
-				printf("Reference level: %.1fdB\n", ref_lev);
-				bias = powf(10.0f, ref_lev * -0.05f);
+			case 'c':
+				channel_count = atof(optarg);
 				break;
-			case 'f':
-				rate = atoi(optarg);
-				printf("Updates per second: %d\n", rate);
+			case 'n':
+				client_name = optarg;
 				break;
-			case 'w':
-				console_width = atoi(optarg);
-				printf("Console Width: %d\n", console_width);
+			case 'v':
+				verbose++;
 				break;
-			case 'h':
-				/* Force help to be shown */
-				usage( argv[0] );
+			case 'p':
+				osc_port = optarg;
 				break;
 			default:
+				fprintf(stderr, "Unknown option '%c'.\n", (char)opt);
+			case 'h':
 				usage( argv[0] );
 				break;
 		}
 	}
-
-
-
-	// Register with Jack
-	snprintf(client_name, 255, "meter-%d", getpid());
-	if ((client = jack_client_new(client_name)) == 0) {
-		fprintf(stderr, "JACK server not running?\n");
-		exit(1);
-	}
-	printf("Registering as %s.\n", client_name);
-
-	// Create our input port
-	if (!(input_port = jack_port_register(client, "meter", JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0))) {
-		fprintf(stderr, "Cannot register input port 'meter'.\n");
-		exit(1);
+	
+	// Number of channels is not an optional parameter
+	if (channel_count<1) {
+		usage( argv[0] );
 	}
 	
-	// Register the cleanup function to be called when program exits
-	atexit( cleanup );
 
-	// Register the peak signal callback
-	jack_set_process_callback(client, process_peak, 0);
+	// Setup JACK
+	setup_jack( client_name );
+	
+	// Create the channel descriptors
+	channels = setup_channels( channel_count );
 
-
+	// Set JACK running
 	if (jack_activate(client)) {
 		fprintf(stderr, "Cannot activate client.\n");
 		exit(1);
 	}
 
-
-	// Connect our port to specified port
-	if (argc > optind) {
-		connect_port( client, argv[ optind ] );
-	} else {
-		printf("Meter is not connected to a port.\n");
-	}
-
-	// Calculate the decay length (should be 1600ms)
-	decay_len = (int)(1.6f / (1.0f/rate));
+	// Setup OSC
+	setup_osc( osc_port );
 	
-
-	// Display the scale
-	display_scale( console_width );
-
+	
+	// Sleep until we are done (work is done in threads)
 	while (running) {
-		display_meter( read_peak(), console_width );
-		fsleep( 1.0f/rate );
+		usleep(1000);
 	}
-
+	
+	
+	// ** Cleanup **
+	//  - close down OSC server
+	//  - close down JACK
+	//  - free up channel memory
+	
 	return 0;
 }
 
