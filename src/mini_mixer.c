@@ -1,7 +1,6 @@
 /*
 
-	jackmeter.c
-	Simple console based Digital Peak Meter for JACK
+	mini_mixer.c
 	Copyright (C) 2005  Nicholas J. Humfrey
 	
 	This program is free software; you can redistribute it and/or
@@ -33,9 +32,15 @@
 #include "config.h"
 
 
+#define		PROGRAM_NAME		"Jack Mini Mixer"
+#define		DEFAULT_CLIENT_NAME	"minimixer"
+#define		DEFAULT_OSC_PORT	"4444"
+
+
 typedef struct {
 	float current_db;
 	float desired_db;
+//	float fade_rate;		// db per sec
 	jack_port_t *left_port;
 	jack_port_t *right_port;
 } mm_channel_t;
@@ -44,72 +49,106 @@ typedef struct {
 jack_port_t *port_out_left = NULL;
 jack_port_t *port_out_right = NULL;
 jack_client_t *client = NULL;
-
+ 
 int verbose = 0;
 int running = 1;
 int channel_count = 0;
 mm_channel_t *channels = NULL;
 
 
+static void
+signal_handler (int signum)
+{
+	switch(signum) {
+		case SIGTERM:	fprintf(stderr, "Got termination signal.\n"); break;
+		case SIGINT:	fprintf(stderr, "Got interupt signal.\n"); break;
+	}
+	running=0;
+}
+
 
 static int quit_handler(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data)
 {
-    printf("Received quit OSC message.\n");
+    if (verbose>1) printf("Received quit OSC message.\n");
     running = 0;
 
     return 0;
 }
 
-static int process_audio(jack_nframes_t nframes, void *arg)
+static int volume_handler(const char *path, const char *types, lo_arg **argv, int argc,
+		 void *data, void *user_data)
 {
-	jack_default_audio_sample_t *in;
+	int chan = argv[0]->i;
+	float vol = argv[1]->f;
 
-/*
-	// just incase the port isn't registered yet
-	if (input_port == NULL) {
-		return 0;
+	if (verbose>1) {
+    	printf("Received volume change OSC message.\n");
+		printf("  channel=%d\n  volume=%f\n", chan, vol);
+	}
+	
+	if (chan < 1 || chan > channel_count) {
+		printf("Error: channel number in OSC message is out of range\n");
+		return 1;
+	}
+	
+	/* store the new value */
+	channels[chan].current_db = vol;
+
+	return 0;
+}
+
+static int process_jack_audio(jack_nframes_t nframes, void *arg)
+{
+	jack_default_audio_sample_t *out_left =
+		jack_port_get_buffer(port_out_left, nframes);
+	jack_default_audio_sample_t *out_right =
+		jack_port_get_buffer(port_out_right, nframes);
+	jack_nframes_t n=0;
+	int ch;
+	
+	// Put silence into the outputs
+	for ( n=0; n<nframes; n++ ) {
+		out_left[ n ] = 0;
+		out_right[ n ] = 0;
 	}
 
-
-	// get the audio samples, and find the peak sample
-	in = (jack_default_audio_sample_t *) jack_port_get_buffer(input_port, nframes);
-	for (i = 0; i < nframes; i++) {
-		const float s = fabs(in[i]);
-		if (s > peak) {
-			peak = s;
+	// Mix each input into the output buffer
+	for ( ch=0; ch < channel_count ; ch++ ) {
+		jack_default_audio_sample_t *in_left =
+			jack_port_get_buffer(channels[ch].left_port, nframes);
+		jack_default_audio_sample_t *in_right =
+			jack_port_get_buffer(channels[ch].right_port, nframes);
+		
+		for ( n=0; n<nframes; n++ ) {
+			out_left[ n ] += in_left[ n ];
+			out_right[ n ] += in_right[ n ];
 		}
+		
 	}
-*/
 
 	return 0;
 }
 
 static void mm_error(int num, const char *msg, const char *path)
 {
-    printf("mini mixer error %d in path %s: %s\n", num, path, msg);
+    printf("%s error %d in path %s: %s\n", PROGRAM_NAME, num, path, msg);
 }
 
 
-
-/* Display how to use this program */
-static int usage( const char * progname )
-{
-	fprintf(stderr, "jack_mini_mixer version %s\n\n", VERSION);
-	fprintf(stderr, "Usage %s -c <channel count> [-p <osc_port>]\n\n", progname);
-	exit(1);
-}
-
-static void setup_osc( const char * port ) 
+static lo_server_thread setup_osc( const char * port ) 
 {
 	// Create OSC server
     lo_server_thread st = lo_server_thread_new(port, mm_error);
 
-	// add method that will match the path /quit with no args
+	// add path handlers
     lo_server_thread_add_method(st, "/quit", "", quit_handler, NULL);
+    lo_server_thread_add_method(st, "/channel/volume", "if", volume_handler, NULL);
 
 	// Set OSC Server running
     lo_server_thread_start(st);
+    
+    return st;
 }
 
 static void setup_jack( const char * client_name ) 
@@ -119,7 +158,7 @@ static void setup_jack( const char * client_name )
 		fprintf(stderr, "JACK server not running?\n");
 		exit(1);
 	}
-	if (verbose) printf("Registering as %s.\n", client_name);
+	if (verbose>0) printf("Registering with JACK at '%s'.\n", client_name);
 
 	// Create our pair of output ports
 	if (!(port_out_left = jack_port_register(client, "out_left", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0))) {
@@ -133,7 +172,7 @@ static void setup_jack( const char * client_name )
 	}
 
 	// Register the peak audio callback
-	jack_set_process_callback(client, process_audio, 0);
+	jack_set_process_callback(client, process_jack_audio, 0);
 
 }
 
@@ -142,12 +181,13 @@ static jack_port_t* create_input_port( const char* side, int chan_num )
 	char port_name[255];
 	jack_port_t *port;
 	
-	snprintf( port_name, 255, "in%d_%s", chan_num, side );
-	if (!(port = jack_port_register(client, port_name, JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0))) {
+	snprintf( port_name, 255, "in%d_%s", chan_num+1, side );
+	port = jack_port_register(client, port_name, JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0);
+	if (!port) {
 		fprintf(stderr, "Cannot register input port '%s'.\n", port_name);
 		exit(1);
 	}
-	if (verbose) printf("Registered port %s\n", port_name);
+	if (verbose>1) printf("Registered JACK port '%s'\n", port_name);
 	
 	return port;
 }
@@ -159,7 +199,7 @@ static mm_channel_t* setup_channels( int chan_count )
 	int c;
 	
 	// Initialise each of the channels
-	for(c=1; c<=chan_count; c++) {
+	for(c=0; c<chan_count; c++) {
 		
 		// Faders start faded down
 		channels[c].current_db=0;
@@ -174,16 +214,27 @@ static mm_channel_t* setup_channels( int chan_count )
 }
 
 
+
+/* Display how to use this program */
+static int usage( const char * progname )
+{
+	fprintf(stderr, "%s version %s\n\n", PROGRAM_NAME, VERSION);
+	fprintf(stderr, "Usage %s -c <channel count> [-p <osc_port>] [-v]\n\n", progname);
+	exit(1);
+}
+
+
 int main(int argc, char *argv[])
 {
+	lo_server_thread server_thread = NULL;
+	char* client_name = DEFAULT_CLIENT_NAME;
+	char* osc_port = DEFAULT_OSC_PORT;
 	int opt;
-	char* client_name = "minimixer";
-	char* osc_port = "4444";
 	
 	while ((opt = getopt(argc, argv, "c:p:vh")) != -1) {
 		switch (opt) {
 			case 'c':
-				channel_count = atof(optarg);
+				channel_count = atoi(optarg);
 				break;
 			case 'n':
 				client_name = optarg;
@@ -207,6 +258,14 @@ int main(int argc, char *argv[])
 		usage( argv[0] );
 	}
 	
+	// Dislay welcoming message
+	if (verbose>0) printf("Starting %s version %s with %d channels.\n",
+							PROGRAM_NAME, VERSION, channel_count);
+
+	// Set signal handlers
+	signal(SIGTERM, signal_handler);
+	signal(SIGINT, signal_handler);
+
 
 	// Setup JACK
 	setup_jack( client_name );
@@ -221,8 +280,8 @@ int main(int argc, char *argv[])
 	}
 
 	// Setup OSC
-	setup_osc( osc_port );
-	
+	server_thread = setup_osc( osc_port );
+
 	
 	// Sleep until we are done (work is done in threads)
 	while (running) {
@@ -230,10 +289,15 @@ int main(int argc, char *argv[])
 	}
 	
 	
-	// ** Cleanup **
-	//  - close down OSC server
-	//  - close down JACK
-	//  - free up channel memory
+	// Cleanup
+	if (server_thread) {
+		lo_server_thread_stop( server_thread );
+		lo_server_thread_free( server_thread );
+		server_thread = NULL;
+	}
+
+	//  ** close down JACK **
+	//  ** free up channel memory **
 	
 	return 0;
 }
