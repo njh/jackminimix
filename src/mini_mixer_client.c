@@ -31,7 +31,7 @@
 
 
 #define		PROGRAM_NAME		"Jack Mini Mixer Client"
-#define		DEFAULT_OSC_HOST	"localhost"
+#define		DEFAULT_OSC_HOST	"127.0.0.1"
 #define		DEFAULT_OSC_PORT	"4444"
 
 
@@ -42,7 +42,8 @@ static int usage()
 	fprintf(stderr, "Usage: jmmc [-h <hostname>] [-p <port>] <command> [<params>]\n");
 	fprintf(stderr, "Available commands:\n");
 	fprintf(stderr, "    quit\n");
-	fprintf(stderr, "    channel_volume <channel> <volume>\n");
+	fprintf(stderr, "    channel_gain <channel> <gain>\n");
+	fprintf(stderr, "    output_gain <gain>\n");
 	exit(1);
 }
 
@@ -83,8 +84,10 @@ int main(int argc, char *argv[])
 	/* Send command to the server */
 	if (strcasecmp( cmd, "quit" )==0) {
 		lo_send( addr, "/quit", "");
-	} else if (strcasecmp( cmd, "channel_volume" )==0) {
-		lo_send( addr, "/channel/volume", "if", atoi(argv[0]), atof(argv[1]));
+	} else if (strcasecmp( cmd, "channel_gain" )==0) {
+		lo_send( addr, "/channel/gain", "if", atoi(argv[0]), atof(argv[1]));
+	} else if (strcasecmp( cmd, "output_gain" )==0) {
+		lo_send( addr, "/output/gain", "f", atof(argv[0]));
 	} else {
 		fprintf(stderr, "Unknown command '%s'.\n", cmd);
 		usage();

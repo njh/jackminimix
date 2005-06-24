@@ -30,7 +30,7 @@
 #include <lo/lo.h>
 #include <getopt.h>
 #include "config.h"
-
+#include "db.h"
 
 #define		PROGRAM_NAME		"Jack Mini Mixer"
 #define		DEFAULT_CLIENT_NAME	"minimixer"
@@ -38,9 +38,9 @@
 
 
 typedef struct {
-	float current_db;
-	float desired_db;
-//	float fade_rate;		// db per sec
+	float current_gain;		// decibels
+	float desired_gain;		// decibels
+//	float fade_rate;		// dB per sec
 	jack_port_t *left_port;
 	jack_port_t *right_port;
 } mm_channel_t;
@@ -53,6 +53,7 @@ jack_client_t *client = NULL;
 int verbose = 0;
 int running = 1;
 int channel_count = 0;
+float output_gain = 0.0f;		// decibels
 mm_channel_t *channels = NULL;
 
 
@@ -67,6 +68,7 @@ signal_handler (int signum)
 }
 
 
+
 static int quit_handler(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data)
 {
@@ -76,15 +78,15 @@ static int quit_handler(const char *path, const char *types, lo_arg **argv, int 
     return 0;
 }
 
-static int volume_handler(const char *path, const char *types, lo_arg **argv, int argc,
+static int channel_gain_handler(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data)
 {
 	int chan = argv[0]->i;
-	float vol = argv[1]->f;
+	float db = argv[1]->f;
 
 	if (verbose>1) {
-    	printf("Received volume change OSC message.\n");
-		printf("  channel=%d\n  volume=%f\n", chan, vol);
+    	printf("Received channel gain change OSC message ");
+		printf("  (channel=%d, gain=%fdB)\n", chan, db);
 	}
 	
 	if (chan < 1 || chan > channel_count) {
@@ -92,11 +94,25 @@ static int volume_handler(const char *path, const char *types, lo_arg **argv, in
 		return 1;
 	}
 	
-	/* store the new value */
-	channels[chan].current_db = vol;
+	// store the new value
+	channels[chan-1].current_gain = db;
 
 	return 0;
 }
+
+
+static int output_gain_handler(const char *path, const char *types, lo_arg **argv, int argc,
+		 void *data, void *user_data)
+{
+	output_gain = argv[0]->f;
+
+	if (verbose>1) {
+    	printf("Received output gain change OSC message (%fdB).\n", output_gain);
+	}
+
+	return 0;
+}
+
 
 static int process_jack_audio(jack_nframes_t nframes, void *arg)
 {
@@ -104,6 +120,7 @@ static int process_jack_audio(jack_nframes_t nframes, void *arg)
 		jack_port_get_buffer(port_out_left, nframes);
 	jack_default_audio_sample_t *out_right =
 		jack_port_get_buffer(port_out_right, nframes);
+	float out_gain = db2lin( output_gain );
 	jack_nframes_t n=0;
 	int ch;
 	
@@ -120,11 +137,18 @@ static int process_jack_audio(jack_nframes_t nframes, void *arg)
 		jack_default_audio_sample_t *in_right =
 			jack_port_get_buffer(channels[ch].right_port, nframes);
 		
+		float mix_gain = db2lin( channels[ch].current_gain );
 		for ( n=0; n<nframes; n++ ) {
-			out_left[ n ] += in_left[ n ];
-			out_right[ n ] += in_right[ n ];
+			out_left[ n ] += (in_left[ n ] * mix_gain);
+			out_right[ n ] += (in_right[ n ] * mix_gain);
 		}
 		
+	}
+
+	// Adjust gain on output
+	for ( n=0; n<nframes; n++ ) {
+		out_left[ n ] *= out_gain;
+		out_right[ n ] *= out_gain;
 	}
 
 	return 0;
@@ -143,7 +167,8 @@ static lo_server_thread setup_osc( const char * port )
 
 	// add path handlers
     lo_server_thread_add_method(st, "/quit", "", quit_handler, NULL);
-    lo_server_thread_add_method(st, "/channel/volume", "if", volume_handler, NULL);
+    lo_server_thread_add_method(st, "/channel/gain", "if", channel_gain_handler, NULL);
+    lo_server_thread_add_method(st, "/output/gain", "f", output_gain_handler, NULL);
 
 	// Set OSC Server running
     lo_server_thread_start(st);
@@ -202,8 +227,8 @@ static mm_channel_t* setup_channels( int chan_count )
 	for(c=0; c<chan_count; c++) {
 		
 		// Faders start faded down
-		channels[c].current_db=0;
-		channels[c].desired_db=0;
+		channels[c].current_gain=-90.0f;
+		channels[c].desired_gain=-90.0f;
 		
 		// Create the JACK input ports
 		channels[c].left_port = create_input_port( "left", c );

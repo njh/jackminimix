@@ -6,6 +6,7 @@ AM_INIT_AUTOMAKE(jackminimixer, 0.1)
 # Check for C compiler
 AC_PROG_CC
 AC_C_CONST
+AC_C_INLINE
 
 # Checks for libraries.
 AC_CHECK_LIB([pthread], [pthread_self], , [AC_MSG_ERROR(You need libpthread installed)])
