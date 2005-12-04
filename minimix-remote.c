@@ -30,66 +30,83 @@
 #include "config.h"
 
 
-#define		PROGRAM_NAME		"Jack Mini Mixer Client"
-#define		DEFAULT_OSC_HOST	"127.0.0.1"
-#define		DEFAULT_OSC_PORT	"4444"
+static
+void error_handler(int num, const char *msg, const char *path)
+{
+    fprintf(stderr, "liblo error %d in path %s: %s\n", num, path, msg);
+}
 
 
 /* Display how to use this program */
-static int usage()
+static int usage(  )
 {
-	fprintf(stderr, "%s version %s\n\n", PROGRAM_NAME, VERSION);
-	fprintf(stderr, "Usage: jmmc [-h <hostname>] [-p <port>] <command> [<params>]\n");
-	fprintf(stderr, "Available commands:\n");
-	fprintf(stderr, "    quit\n");
-	fprintf(stderr, "    channel_gain <channel> <gain>\n");
-	fprintf(stderr, "    output_gain <gain>\n");
+	printf("jack-minimix-remote version %s\n\n", PACKAGE_VERSION);
+	printf("Usage: jmmc [-h <hostname>] [-p <port>] <command> [<params>]\n");
+	printf("Available commands:\n");
+	printf("    quit\n");
+	printf("    channel_gain <channel> <gain>\n");
+	printf("    output_gain <gain>\n");
 	exit(1);
 }
 
 
 int main(int argc, char *argv[])
 {
-	char* osc_host = DEFAULT_OSC_HOST;
-	char* osc_port = DEFAULT_OSC_PORT;
-	char* cmd = NULL;
-	lo_address* addr = NULL;
+	char *port = NULL;
+	char *url = NULL;
+	lo_address addr = NULL;
+	lo_server serv = NULL;
 	int opt;
-	
-	while ((opt = getopt(argc, argv, "h:p:")) != -1) {
+
+	// Parse Switches
+	while ((opt = getopt(argc, argv, "p:u:h")) != -1) {
 		switch (opt) {
-			case 'h':
-				osc_host = optarg;
-				break;
 			case 'p':
-				osc_port = optarg;
+				port = optarg;
 				break;
+				
+			case 'u':
+				url = optarg;
+				break;
+				
 			default:
-				fprintf(stderr, "Unknown option '%c'.\n", (char)opt);
-				usage( argv[0] );
+				usage( );
 				break;
 		}
 	}
-	argc -= optind;
-	argv += optind;
-     
-	/* Create a new liblo socket */
-	addr = lo_address_new( osc_host, osc_port );
 	
+	// Need either a port or URL
+	if (!port && !url) {
+		fprintf(stderr, "Either URL or Port argument is required.\n");
+		usage( );
+	}
 	
-	/* Next argument is the command */
-	if (argc<1) usage();
-	cmd = argv[0]; argv++; argc--;
+	// Check remaining arguments
+    argc -= optind;
+    argv += optind;
+    if (argc<1) usage( );
+    
+    
+	// Create address structure to send on
+	if (port) 	addr = lo_address_new(NULL, port);
+	else		addr = lo_address_new_from_url(url);
+
 	
-	/* Send command to the server */
-	if (strcasecmp( cmd, "quit" )==0) {
+	// Create a server for receiving replies on
+    serv = lo_server_new(NULL, error_handler);
+	//lo_server_add_method( serv, "/deck/state", "s", state_handler, addr);
+	//lo_server_add_method( serv, "/deck/position", "f", position_handler, addr);
+	//lo_server_add_method( serv, "/pong", "", ping_handler, addr);
+
+	// Send command to the server
+	if (strcasecmp( argv[0], "quit" )==0) {
 		lo_send( addr, "/quit", "");
-	} else if (strcasecmp( cmd, "channel_gain" )==0) {
+	} else if (strcasecmp( argv[0], "channel_gain" )==0) {
 		lo_send( addr, "/channel/gain", "if", atoi(argv[0]), atof(argv[1]));
-	} else if (strcasecmp( cmd, "output_gain" )==0) {
+	} else if (strcasecmp( argv[0], "output_gain" )==0) {
 		lo_send( addr, "/output/gain", "f", atof(argv[0]));
 	} else {
-		fprintf(stderr, "Unknown command '%s'.\n", cmd);
+		fprintf(stderr, "Unknown command '%s'.\n", argv[0]);
 		usage();
 	}
 	

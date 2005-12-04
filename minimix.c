@@ -33,7 +33,7 @@
 #include "config.h"
 #include "db.h"
 
-#define		PROGRAM_NAME		"Jack Mini Mixer"
+
 #define		DEFAULT_CLIENT_NAME	"minimixer"
 
 
@@ -156,7 +156,7 @@ static int process_jack_audio(jack_nframes_t nframes, void *arg)
 
 static void mm_error(int num, const char *msg, const char *path)
 {
-    printf("%s error %d in path %s: %s\n", PROGRAM_NAME, num, path, msg);
+    printf("JackMiniMix error %d in path %s: %s\n", num, path, msg);
 }
 
 
@@ -243,7 +243,7 @@ static mm_channel_t* setup_channels( int chan_count )
 /* Display how to use this program */
 static int usage( const char * progname )
 {
-	printf("%s version %s\n\n", PROGRAM_NAME, VERSION);
+	printf("JackMiniMix version %s\n\n", PACKAGE_VERSION);
 	printf("Usage %s -c <channel count> -p <osc_port> [-v]\n\n", progname);
 	exit(1);
 }
@@ -283,8 +283,8 @@ int main(int argc, char *argv[])
 	if (channel_count<1) usage( argv[0] );
 	
 	// Dislay welcoming message
-	if (verbose>0) printf("Starting %s version %s with %d channels.\n",
-							PROGRAM_NAME, VERSION, channel_count);
+	if (verbose>0) printf("Starting JackMiniMix version %s with %d channels.\n",
+							VERSION, channel_count);
 
 	// Set signal handlers
 	signal(SIGTERM, signal_handler);
