@@ -25,6 +25,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include <jack/jack.h>
 #include <lo/lo.h>
@@ -34,7 +35,6 @@
 
 #define		PROGRAM_NAME		"Jack Mini Mixer"
 #define		DEFAULT_CLIENT_NAME	"minimixer"
-#define		DEFAULT_OSC_PORT	"4444"
 
 
 typedef struct {
@@ -243,8 +243,8 @@ static mm_channel_t* setup_channels( int chan_count )
 /* Display how to use this program */
 static int usage( const char * progname )
 {
-	fprintf(stderr, "%s version %s\n\n", PROGRAM_NAME, VERSION);
-	fprintf(stderr, "Usage %s -c <channel count> [-p <osc_port>] [-v]\n\n", progname);
+	printf("%s version %s\n\n", PROGRAM_NAME, VERSION);
+	printf("Usage %s -c <channel count> -p <osc_port> [-v]\n\n", progname);
 	exit(1);
 }
 
@@ -253,7 +253,7 @@ int main(int argc, char *argv[])
 {
 	lo_server_thread server_thread = NULL;
 	char* client_name = DEFAULT_CLIENT_NAME;
-	char* osc_port = DEFAULT_OSC_PORT;
+	char* osc_port = NULL;
 	int opt;
 	
 	while ((opt = getopt(argc, argv, "c:p:vh")) != -1) {
@@ -278,10 +278,9 @@ int main(int argc, char *argv[])
 		}
 	}
 	
-	// Number of channels is not an optional parameter
-	if (channel_count<1) {
-		usage( argv[0] );
-	}
+	// Not optional parameters
+	if (!osc_port) usage( argv[0] );
+	if (channel_count<1) usage( argv[0] );
 	
 	// Dislay welcoming message
 	if (verbose>0) printf("Starting %s version %s with %d channels.\n",
