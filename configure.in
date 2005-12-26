@@ -34,7 +34,7 @@ AC_CHECK_LIB([mx], [powf])
 PKG_CHECK_MODULES(JACK, jack >= 0.100.0)
 
 # Check for LibLO
-PKG_CHECK_MODULES(LIBLO, liblo)
+PKG_CHECK_MODULES(LIBLO, liblo >= 0.23)
 
 
 
