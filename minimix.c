@@ -1,6 +1,6 @@
 /*
 
-	mini_mixer.c
+	minimix.c
 	Copyright (C) 2005  Nicholas J. Humfrey
 	
 	This program is free software; you can redistribute it and/or
@@ -34,16 +34,19 @@
 #include "db.h"
 
 
-#define		DEFAULT_CLIENT_NAME	"minimixer"
+#define		DEFAULT_CLIENT_NAME		"minimixer"
+#define		DEFAULT_CHANNEL_COUNT	(4)
+#define		CHANNEL_LABEL_LEN		(12)
+#define		FADE_RATE				(0.1)
 
 
 typedef struct {
-	float current_gain;		// decibels
-	float desired_gain;		// decibels
-//	float fade_rate;		// dB per sec
-	jack_port_t *left_port;
-	jack_port_t *right_port;
-} mm_channel_t;
+	char label[CHANNEL_LABEL_LEN];	// Label for Channel
+	float current_gain;				// decibels
+	float desired_gain;				// decibels
+	jack_port_t *left_port;			// Left Input Port
+	jack_port_t *right_port;		// Right Input Port
+} jmm_channel_t;
 
 
 jack_port_t *port_out_left = NULL;
@@ -51,76 +54,187 @@ jack_port_t *port_out_right = NULL;
 jack_client_t *client = NULL;
  
 int verbose = 0;
+int quiet = 0;
 int running = 1;
-int channel_count = 0;
-float output_gain = 0.0f;		// decibels
-mm_channel_t *channels = NULL;
+int channel_count = DEFAULT_CHANNEL_COUNT;
+jmm_channel_t *channels = NULL;
 
 
-static void
-signal_handler (int signum)
+static
+void signal_handler (int signum)
 {
-	switch(signum) {
-		case SIGTERM:	fprintf(stderr, "Got termination signal.\n"); break;
-		case SIGINT:	fprintf(stderr, "Got interupt signal.\n"); break;
+	if (!quiet) {
+		switch(signum) {
+			case SIGTERM:	fprintf(stderr, "Got termination signal.\n"); break;
+			case SIGINT:	fprintf(stderr, "Got interupt signal.\n"); break;
+		}
 	}
 	running=0;
 }
 
 
 
-static int quit_handler(const char *path, const char *types, lo_arg **argv, int argc,
-		 void *data, void *user_data)
+static
+int ping_handler(const char *path, const char *types, lo_arg **argv, int argc,
+		 lo_message msg, void *user_data)
 {
-    if (verbose>1) printf("Received quit OSC message.\n");
-    running = 0;
+	lo_address src = lo_message_get_source( msg );
+	lo_server serv = (lo_server)user_data;
+	int result;
+	
+	// Display the address the ping came from
+	if (verbose) {
+		char *url = lo_address_get_url(src);
+		printf( "Got ping from: %s\n", url);
+		free(url);
+	}
+
+	// Send back reply
+	result = lo_send_from( src, serv, LO_TT_IMMEDIATE, "/pong", "" );
+	if (result<1) fprintf(stderr, "Error: sending reply failed: %s\n", lo_address_errstr(src));
 
     return 0;
 }
 
-static int channel_gain_handler(const char *path, const char *types, lo_arg **argv, int argc,
-		 void *data, void *user_data)
+static
+int wildcard_handler(const char *path, const char *types, lo_arg **argv, int argc,
+		 lo_message msg, void *user_data)
 {
+	if (verbose) {
+		fprintf(stderr, "Warning: unhandled OSC message: '%s' with args '%s'.\n", path, types);
+	}
+
+    return -1;
+}
+
+static
+int set_gain_handler(const char *path, const char *types, lo_arg **argv, int argc,
+		 lo_message msg, void *user_data)
+{
+	lo_address src = lo_message_get_source( msg );
+	lo_server serv = (lo_server)user_data;
 	int chan = argv[0]->i;
 	float db = argv[1]->f;
+	int result;
 
-	if (verbose>1) {
+	if (verbose) {
     	printf("Received channel gain change OSC message ");
 		printf("  (channel=%d, gain=%fdB)\n", chan, db);
 	}
 	
 	if (chan < 1 || chan > channel_count) {
-		printf("Error: channel number in OSC message is out of range\n");
+		fprintf(stderr,"Warning: channel number in OSC message is out of range.\n");
 		return 1;
 	}
 	
 	// store the new value
-	channels[chan-1].current_gain = db;
+	channels[chan-1].desired_gain = db;
+
+	// Send back reply
+	result = lo_send_from( src, serv, LO_TT_IMMEDIATE, "/mixer/channel/gain", "if", chan, channels[chan-1].desired_gain );
+	if (result<1) fprintf(stderr, "Error: sending reply failed: %s\n", lo_address_errstr(src));
 
 	return 0;
 }
 
-
-static int output_gain_handler(const char *path, const char *types, lo_arg **argv, int argc,
-		 void *data, void *user_data)
+static
+int get_gain_handler(const char *path, const char *types, lo_arg **argv, int argc,
+		 lo_message msg, void *user_data)
 {
-	output_gain = argv[0]->f;
+	lo_address src = lo_message_get_source( msg );
+	lo_server serv = (lo_server)user_data;
+	int chan = argv[0]->i;
+	int result;
 
-	if (verbose>1) {
-    	printf("Received output gain change OSC message (%fdB).\n", output_gain);
+	// Send back reply
+	result = lo_send_from( src, serv, LO_TT_IMMEDIATE, "/mixer/channel/gain", "if", chan, channels[chan-1].desired_gain );
+	if (result<1) fprintf(stderr, "Error: sending reply failed: %s\n", lo_address_errstr(src));
+
+	return 0;
+}
+
+static
+int set_label_handler(const char *path, const char *types, lo_arg **argv, int argc,
+		 lo_message msg, void *user_data)
+{
+	lo_address src = lo_message_get_source( msg );
+	lo_server serv = (lo_server)user_data;
+	int chan = argv[0]->i;
+	char* label = &argv[1]->s;
+	int result;
+
+	if (verbose) {
+    	printf("Received channel label change OSC message ");
+		printf("  (channel=%d, label='%s')\n", chan, label);
 	}
+	
+	if (chan < 1 || chan > channel_count) {
+		fprintf(stderr, "Warning: channel number in OSC message is out of range.\n");
+		return 1;
+	}
+	
+	// store the new value
+	strncpy( channels[chan-1].label, label, CHANNEL_LABEL_LEN);
+
+	// Send back reply
+	result = lo_send_from( src, serv, LO_TT_IMMEDIATE, "/mixer/channel/label", "is", chan, channels[chan-1].label );
+	if (result<1) fprintf(stderr, "Error: sending reply failed: %s\n", lo_address_errstr(src));
+
+	return 0;
+}
+
+static
+int get_label_handler(const char *path, const char *types, lo_arg **argv, int argc,
+		 lo_message msg, void *user_data)
+{
+	lo_address src = lo_message_get_source( msg );
+	lo_server serv = (lo_server)user_data;
+	int chan = argv[0]->i;
+	int result;
+
+	// Send back reply
+	result = lo_send_from( src, serv, LO_TT_IMMEDIATE, "/mixer/channel/label", "is", chan, channels[chan-1].label );
+	if (result<1) fprintf(stderr, "Error: sending reply failed: %s\n", lo_address_errstr(src));
+
+	return 0;
+}
+
+int get_channel_count_handler(const char *path, const char *types, lo_arg **argv, int argc,
+		 lo_message msg, void *user_data)
+{
+	lo_address src = lo_message_get_source( msg );
+	lo_server serv = (lo_server)user_data;
+	int result;
+
+	// Send back reply
+	result = lo_send_from( src, serv, LO_TT_IMMEDIATE, "/mixer/channel_count", "i", channel_count );
+	if (result<1) fprintf(stderr, "Error: sending reply failed: %s\n", lo_address_errstr(src));
 
 	return 0;
 }
 
 
-static int process_jack_audio(jack_nframes_t nframes, void *arg)
+static
+void error_handler(int num, const char *msg, const char *path)
+{
+    fprintf(stderr, "LibLO server error %d in path %s: %s\n", num, path, msg);
+    fflush(stdout);
+}
+
+static
+void shutdown_callback_jack(void *arg)
+{
+	running = 0;
+}
+
+
+static
+int process_jack_audio(jack_nframes_t nframes, void *arg)
 {
 	jack_default_audio_sample_t *out_left =
 		jack_port_get_buffer(port_out_left, nframes);
 	jack_default_audio_sample_t *out_right =
 		jack_port_get_buffer(port_out_right, nframes);
-	float out_gain = db2lin( output_gain );
 	jack_nframes_t n=0;
 	int ch;
 	
@@ -132,12 +246,17 @@ static int process_jack_audio(jack_nframes_t nframes, void *arg)
 
 	// Mix each input into the output buffer
 	for ( ch=0; ch < channel_count ; ch++ ) {
+		float mix_gain;
 		jack_default_audio_sample_t *in_left =
 			jack_port_get_buffer(channels[ch].left_port, nframes);
 		jack_default_audio_sample_t *in_right =
 			jack_port_get_buffer(channels[ch].right_port, nframes);
 		
-		float mix_gain = db2lin( channels[ch].current_gain );
+		// Adjust the gain ?
+		channels[ch].current_gain = channels[ch].desired_gain;
+		
+		// Mix the audio
+		mix_gain = db2lin( channels[ch].current_gain );
 		for ( n=0; n<nframes; n++ ) {
 			out_left[ n ] += (in_left[ n ] * mix_gain);
 			out_right[ n ] += (in_right[ n ] * mix_gain);
@@ -145,45 +264,67 @@ static int process_jack_audio(jack_nframes_t nframes, void *arg)
 		
 	}
 
-	// Adjust gain on output
-	for ( n=0; n<nframes; n++ ) {
-		out_left[ n ] *= out_gain;
-		out_right[ n ] *= out_gain;
-	}
-
 	return 0;
 }
 
-static void mm_error(int num, const char *msg, const char *path)
+
+
+static
+lo_server_thread init_osc( const char * port ) 
 {
-    printf("JackMiniMix error %d in path %s: %s\n", num, path, msg);
+	lo_server_thread st = NULL;
+	lo_server serv = NULL;
+	
+	// Create new server
+	st = lo_server_thread_new( port, error_handler );
+	if (!st) return NULL;
+	
+	// Add the methods
+	serv = lo_server_thread_get_server( st );
+    lo_server_thread_add_method(st, "/mixer/get_channel_count", "", get_channel_count_handler, serv);
+    lo_server_thread_add_method(st, "/mixer/channel/set_gain", "if", set_gain_handler, serv);
+    lo_server_thread_add_method(st, "/mixer/channel/get_gain", "i", get_gain_handler, serv);
+    lo_server_thread_add_method(st, "/mixer/channel/get_label", "i", get_label_handler, serv);
+    lo_server_thread_add_method(st, "/mixer/channel/set_label", "is", set_label_handler, serv);
+	lo_server_thread_add_method( st, "/ping", "", ping_handler, serv);
+
+    // add method that will match any path and args
+    lo_server_thread_add_method(st, NULL, NULL, wildcard_handler, serv);
+
+	// Start the thread
+	lo_server_thread_start(st);
+
+	if (!quiet) {
+		char *url = lo_server_thread_get_url( st );
+		printf( "OSC server URL: %s\n", url );
+		free(url);
+	}
+	
+	return st;
+}
+
+static
+void finish_osc( lo_server_thread st )
+{
+	if (verbose) printf( "Stopping OSC server thread.\n");
+
+	lo_server_thread_stop( st );
+	lo_server_thread_free( st );
+	
 }
 
 
-static lo_server_thread setup_osc( const char * port ) 
+static
+void init_jack( const char * client_name ) 
 {
-	// Create OSC server
-    lo_server_thread st = lo_server_thread_new(port, mm_error);
+	jack_status_t status;
 
-	// add path handlers
-    lo_server_thread_add_method(st, "/quit", "", quit_handler, NULL);
-    lo_server_thread_add_method(st, "/channel/gain", "if", channel_gain_handler, NULL);
-    lo_server_thread_add_method(st, "/output/gain", "f", output_gain_handler, NULL);
-
-	// Set OSC Server running
-    lo_server_thread_start(st);
-    
-    return st;
-}
-
-static void setup_jack( const char * client_name ) 
-{
 	// Register with Jack
-	if ((client = jack_client_new(client_name)) == 0) {
-		fprintf(stderr, "JACK server not running?\n");
+	if ((client = jack_client_open(client_name, JackNullOption, &status)) == 0) {
+		fprintf(stderr, "Failed to start jack client: %d\n", status);
 		exit(1);
 	}
-	if (verbose>0) printf("Registering with JACK at '%s'.\n", client_name);
+	if (!quiet) printf("JACK client registered as '%s'.\n", jack_get_client_name( client ) );
 
 	// Create our pair of output ports
 	if (!(port_out_left = jack_port_register(client, "out_left", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0))) {
@@ -196,35 +337,50 @@ static void setup_jack( const char * client_name )
 		exit(1);
 	}
 
+	// Register shutdown callback
+	jack_on_shutdown (client, shutdown_callback_jack, NULL );
+
 	// Register the peak audio callback
 	jack_set_process_callback(client, process_jack_audio, 0);
 
 }
 
-static jack_port_t* create_input_port( const char* side, int chan_num )
+static
+void finish_jack( jack_client_t *client )
 {
-	char port_name[255];
+	// Leave the Jack graph
+	jack_client_close(client);
+}
+
+
+static
+jack_port_t* create_input_port( const char* side, int chan_num )
+{
+	int port_name_size = jack_port_name_size();
+	char *port_name = malloc( port_name_size );
 	jack_port_t *port;
 	
-	snprintf( port_name, 255, "in%d_%s", chan_num+1, side );
+	snprintf( port_name, port_name_size, "in%d_%s", chan_num+1, side );
 	port = jack_port_register(client, port_name, JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0);
 	if (!port) {
 		fprintf(stderr, "Cannot register input port '%s'.\n", port_name);
 		exit(1);
 	}
-	if (verbose>1) printf("Registered JACK port '%s'\n", port_name);
 	
 	return port;
 }
 
-static mm_channel_t* setup_channels( int chan_count ) 
+static
+jmm_channel_t* init_channels( int chan_count ) 
 {
-	mm_channel_t* channels = (mm_channel_t*)malloc( 
-			sizeof(mm_channel_t) * chan_count);
+	jmm_channel_t* channels = (jmm_channel_t*)malloc( 
+			sizeof(jmm_channel_t) * chan_count);
 	int c;
 	
 	// Initialise each of the channels
 	for(c=0; c<chan_count; c++) {
+	
+		snprintf( channels[c].label, CHANNEL_LABEL_LEN, "Channel %d", c+1 );
 		
 		// Faders start faded down
 		channels[c].current_gain=-90.0f;
@@ -238,13 +394,24 @@ static mm_channel_t* setup_channels( int chan_count )
 	return channels;
 }
 
+static
+void finish_channels( jmm_channel_t* channels )
+{
 
+}
 
 /* Display how to use this program */
-static int usage( const char * progname )
+static
+int usage( const char * progname )
 {
 	printf("JackMiniMix version %s\n\n", PACKAGE_VERSION);
-	printf("Usage %s -c <channel count> -p <osc_port> [-v]\n\n", progname);
+	printf("Usage: %s [options]\n", PACKAGE_NAME);
+	printf("   -c <count>    Number of input channels (default 4)\n");
+	printf("   -p <port>     Set the UDP port number for OSC\n");
+	printf("   -n <name>     Name for this JACK client (default minimix)\n");
+	printf("   -v            Enable verbose mode\n");
+	printf("   -q            Enable quiet mode\n");
+	printf("\n");
 	exit(1);
 }
 
@@ -256,7 +423,7 @@ int main(int argc, char *argv[])
 	char* osc_port = NULL;
 	int opt;
 	
-	while ((opt = getopt(argc, argv, "c:p:vh")) != -1) {
+	while ((opt = getopt(argc, argv, "c:p:vqh")) != -1) {
 		switch (opt) {
 			case 'c':
 				channel_count = atoi(optarg);
@@ -266,6 +433,9 @@ int main(int argc, char *argv[])
 				break;
 			case 'v':
 				verbose++;
+				break;
+			case 'q':
+				quiet++;
 				break;
 			case 'p':
 				osc_port = optarg;
@@ -278,12 +448,11 @@ int main(int argc, char *argv[])
 		}
 	}
 	
-	// Not optional parameters
-	if (!osc_port) usage( argv[0] );
+	// Not optional parameter
 	if (channel_count<1) usage( argv[0] );
 	
 	// Dislay welcoming message
-	if (verbose>0) printf("Starting JackMiniMix version %s with %d channels.\n",
+	if (verbose) printf("Starting JackMiniMix version %s with %d channels.\n",
 							VERSION, channel_count);
 
 	// Set signal handlers
@@ -292,10 +461,10 @@ int main(int argc, char *argv[])
 
 
 	// Setup JACK
-	setup_jack( client_name );
+	init_jack( client_name );
 	
 	// Create the channel descriptors
-	channels = setup_channels( channel_count );
+	channels = init_channels( channel_count );
 
 	// Set JACK running
 	if (jack_activate(client)) {
@@ -304,7 +473,7 @@ int main(int argc, char *argv[])
 	}
 
 	// Setup OSC
-	server_thread = setup_osc( osc_port );
+	server_thread = init_osc( osc_port );
 
 	
 	// Sleep until we are done (work is done in threads)
@@ -314,15 +483,10 @@ int main(int argc, char *argv[])
 	
 	
 	// Cleanup
-	if (server_thread) {
-		lo_server_thread_stop( server_thread );
-		lo_server_thread_free( server_thread );
-		server_thread = NULL;
-	}
+	finish_osc( server_thread );
+	finish_jack( client );
+	finish_channels( channels );
 
-	//  ** close down JACK **
-	//  ** free up channel memory **
-	
 	return 0;
 }
 
