@@ -49,14 +49,13 @@ typedef struct {
 } jmm_channel_t;
 
 
-jack_port_t *port_out_left = NULL;
-jack_port_t *port_out_right = NULL;
+jack_port_t *outport[2] = {NULL, NULL};
 jack_client_t *client = NULL;
  
-int verbose = 0;
-int quiet = 0;
-int running = 1;
-int channel_count = DEFAULT_CHANNEL_COUNT;
+unsigned int verbose = 0;
+unsigned int quiet = 0;
+unsigned int running = 1;
+unsigned int channel_count = DEFAULT_CHANNEL_COUNT;
 jmm_channel_t *channels = NULL;
 
 
@@ -119,7 +118,7 @@ int set_gain_handler(const char *path, const char *types, lo_arg **argv, int arg
 
 	if (verbose) {
     	printf("Received channel gain change OSC message ");
-		printf("  (channel=%d, gain=%fdB)\n", chan, db);
+		printf(" (channel=%d, gain=%fdB)\n", chan, db);
 	}
 	
 	if (chan < 1 || chan > channel_count) {
@@ -165,7 +164,7 @@ int set_label_handler(const char *path, const char *types, lo_arg **argv, int ar
 
 	if (verbose) {
     	printf("Received channel label change OSC message ");
-		printf("  (channel=%d, label='%s')\n", chan, label);
+		printf(" (channel=%d, label='%s')\n", chan, label);
 	}
 	
 	if (chan < 1 || chan > channel_count) {
@@ -232,9 +231,9 @@ static
 int process_jack_audio(jack_nframes_t nframes, void *arg)
 {
 	jack_default_audio_sample_t *out_left =
-		jack_port_get_buffer(port_out_left, nframes);
+		jack_port_get_buffer(outport[0], nframes);
 	jack_default_audio_sample_t *out_right =
-		jack_port_get_buffer(port_out_right, nframes);
+		jack_port_get_buffer(outport[1], nframes);
 	jack_nframes_t n=0;
 	int ch;
 	
@@ -327,12 +326,12 @@ void init_jack( const char * client_name )
 	if (!quiet) printf("JACK client registered as '%s'.\n", jack_get_client_name( client ) );
 
 	// Create our pair of output ports
-	if (!(port_out_left = jack_port_register(client, "out_left", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0))) {
+	if (!(outport[0] = jack_port_register(client, "out_left", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0))) {
 		fprintf(stderr, "Cannot register output port 'out_left'.\n");
 		exit(1);
 	}
 	
-	if (!(port_out_right = jack_port_register(client, "out_right", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0))) {
+	if (!(outport[1] = jack_port_register(client, "out_right", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0))) {
 		fprintf(stderr, "Cannot register output port 'out_right'.\n");
 		exit(1);
 	}
@@ -344,6 +343,48 @@ void init_jack( const char * client_name )
 	jack_set_process_callback(client, process_jack_audio, 0);
 
 }
+
+void connect_jack_port( jack_port_t *port, const char* in )
+{
+	const char* out = jack_port_name( port );
+	int err;
+		
+	if (!quiet) printf("Connecting %s to %s\n", out, in);
+	
+	if ((err = jack_connect(client, out, in)) != 0) {
+		fprintf(stderr, "connect_jack_port(): failed to jack_connect() ports: %d\n",err);
+		exit(1);
+	}
+}
+
+
+// crude way of automatically connecting up jack ports
+void autoconnect_jack_ports( jack_client_t* client )
+{
+	const char **all_ports;
+	unsigned int ch=0;
+	int i;
+
+	// Get a list of all the jack ports
+	all_ports = jack_get_ports(client, NULL, NULL, JackPortIsInput);
+	if (!all_ports) {
+		fprintf(stderr, "autoconnect_jack_ports(): jack_get_ports() returned NULL.");
+		exit(1);
+	}
+	
+	// Step through each port name
+	for (i = 0; all_ports[i]; ++i) {
+		
+		// Connect the port
+		connect_jack_port( outport[ch], all_ports[i] );
+		
+		// Found enough ports ?
+		if (++ch >= 2) break;
+	}
+	
+	free( all_ports );
+}
+
 
 static
 void finish_jack( jack_client_t *client )
@@ -402,10 +443,13 @@ void finish_channels( jmm_channel_t* channels )
 
 /* Display how to use this program */
 static
-int usage( const char * progname )
+int usage( )
 {
 	printf("JackMiniMix version %s\n\n", PACKAGE_VERSION);
-	printf("Usage: %s [options]\n", PACKAGE_NAME);
+	printf("Usage: %s [options] [<channel label> ...]\n", PACKAGE_NAME);
+	printf("   -a            Automatically connect our output JACK ports\n");
+	printf("   -l <port>     Connect left output to this input port\n");
+	printf("   -r <port>     Connect right output to this input port\n");
 	printf("   -c <count>    Number of input channels (default 4)\n");
 	printf("   -p <port>     Set the UDP port number for OSC\n");
 	printf("   -n <name>     Name for this JACK client (default minimix)\n");
@@ -419,27 +463,25 @@ int usage( const char * progname )
 int main(int argc, char *argv[])
 {
 	lo_server_thread server_thread = NULL;
-	char* client_name = DEFAULT_CLIENT_NAME;
+	int autoconnect = 0;
+	char *client_name = DEFAULT_CLIENT_NAME;
+	char *connect_left = NULL;
+	char *connect_right = NULL;
 	char* osc_port = NULL;
-	int opt;
+	int i,opt;
 	
-	while ((opt = getopt(argc, argv, "c:p:vqh")) != -1) {
+	
+	// Parse the command line arguments
+	while ((opt = getopt(argc, argv, "al:r:c:p:vqh")) != -1) {
 		switch (opt) {
-			case 'c':
-				channel_count = atoi(optarg);
-				break;
-			case 'n':
-				client_name = optarg;
-				break;
-			case 'v':
-				verbose++;
-				break;
-			case 'q':
-				quiet++;
-				break;
-			case 'p':
-				osc_port = optarg;
-				break;
+			case 'a':  autoconnect = 1; break;
+			case 'l':  connect_left = optarg; break;
+			case 'r':  connect_right = optarg; break;
+			case 'c':  channel_count = atoi(optarg); break;
+			case 'n':  client_name = optarg; break;
+			case 'v':  verbose++; break;
+			case 'q':  quiet++; break;
+			case 'p':  osc_port = optarg; break;
 			default:
 				fprintf(stderr, "Unknown option '%c'.\n", (char)opt);
 			case 'h':
@@ -447,9 +489,11 @@ int main(int argc, char *argv[])
 				break;
 		}
 	}
+    argc -= optind;
+    argv += optind;
 	
-	// Not optional parameter
-	if (channel_count<1) usage( argv[0] );
+	// Check parameters
+	if (channel_count<1) usage();
 	
 	// Dislay welcoming message
 	if (verbose) printf("Starting JackMiniMix version %s with %d channels.\n",
@@ -462,9 +506,14 @@ int main(int argc, char *argv[])
 
 	// Setup JACK
 	init_jack( client_name );
-	
+
 	// Create the channel descriptors
 	channels = init_channels( channel_count );
+	
+	// Label the channels
+	for(i=0; i<argc && i<channel_count; i++) {
+		strncpy( channels[i].label, argv[i], CHANNEL_LABEL_LEN );
+	}
 
 	// Set JACK running
 	if (jack_activate(client)) {
@@ -472,10 +521,16 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
+	// Auto-connect our output ports ?
+	if (autoconnect) autoconnect_jack_ports( client );
+	if (connect_left) connect_jack_port( outport[0], connect_left );
+	if (connect_right) connect_jack_port( outport[1], connect_right );
+
+
 	// Setup OSC
 	server_thread = init_osc( osc_port );
 
-	
+
 	// Sleep until we are done (work is done in threads)
 	while (running) {
 		usleep(1000);
