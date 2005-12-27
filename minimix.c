@@ -439,9 +439,15 @@ jmm_channel_t* init_channels( int chan_count )
 	
 		snprintf( channels[c].label, CHANNEL_LABEL_LEN, "Channel %d", c+1 );
 		
-		// Faders start faded down
-		channels[c].current_gain=-90.0f;
-		channels[c].desired_gain=-90.0f;
+		if (c==0) {
+			// Channel 1 starts with gain of 0
+			channels[c].current_gain=0.0f;
+			channels[c].desired_gain=0.0f;
+		} else {
+			// Other channels start faded down
+			channels[c].current_gain=-90.0f;
+			channels[c].desired_gain=-90.0f;
+		}
 		
 		// Create the JACK input ports
 		channels[c].left_port = create_input_port( "left", c );
