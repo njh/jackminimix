@@ -4,5 +4,4 @@ lib/Audio/JackMiniMix.pm
 MANIFEST
 META.yml
 README
-jmm-remote.pl
 t/00use.t

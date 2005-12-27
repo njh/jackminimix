@@ -25,6 +25,11 @@ API Overview
 	Audio::JackMiniMix
 		- new( url )
 		- new( host, port )
+		- channel_count()
+		- set_channel_gain( channel, gain )
+		- get_channel_gain( channel )
+		- set_channel_label( channel, label )
+		- get_channel_label( channel )
 		- get_url();
 		- ping()
 		

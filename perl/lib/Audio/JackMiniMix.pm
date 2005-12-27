@@ -25,11 +25,9 @@ sub new {
 
     # Bless the hash into an object
     my $self = { 
-    	pong => 0,
-    	state => undef,
-    	position => undef,
-    	filename => undef,
-    	filepath => undef
+    	channel_count => 0,
+    	channels => {},
+    	pong => 0
     };
     bless $self, $class;
 
@@ -48,14 +46,13 @@ sub new {
     }
     
     # Add reply handlers
-    $self->{lo}->add_method( '/deck/state', 's', \&_state_handler, $self );
-    $self->{lo}->add_method( '/deck/position', 'd', \&_position_handler, $self );
-    $self->{lo}->add_method( '/deck/filename', 's', \&_filename_handler, $self );
-    $self->{lo}->add_method( '/deck/filepath', 's', \&_filepath_handler, $self );
-    $self->{lo}->add_method( '/pong', '', \&_pong_handler, $self );
+    $self->{lo}->add_method( '/mixer/channel/gain', 'if', \&_channel_gain_handler, $self );
+    $self->{lo}->add_method( '/mixer/channel/label', 'is', \&_channel_label_handler, $self );
+    $self->{lo}->add_method( '/mixer/channel_count', 'i', \&_channel_count_handler, $self );
+	$self->{lo}->add_method( '/pong', '', \&_pong_handler, $self );
     
-    # Check JackMiniMix server is there
-    if (!$self->ping()) {
+    # Get the number of channels
+    if (!$self->channel_count()) {
     	carp("JackMiniMix server is not responding");
     	return undef;
     }
@@ -63,88 +60,83 @@ sub new {
    	return $self;
 }
 
-sub load {
+sub channel_count {
 	my $self=shift;
-	my ($filename) = @_;
-	return $self->_send( '/deck/load', 'LOADING|READY|ERROR', 's', $filename);
+	$self->{channel_count} = 0;
+	$self->_wait_reply( '/mixer/get_channel_count' );
+	return $self->{channel_count};
 }
 
-
-sub play {
-	my $self=shift;
-	return $self->_send( '/deck/play', 'PLAYING');
-}
-
-sub pause {
-	my $self=shift;
-	return $self->_send( '/deck/pause', 'PAUSED');
-}
-
-sub stop {
-	my $self=shift;
-	return $self->_send( '/deck/stop', 'STOPPED');
-}
-
-sub cue {
-	my $self=shift;
-	return $self->_send( '/deck/cue', 'LOADING|READY');
-}
-
-sub eject {
-	my $self=shift;
-	return $self->_send( '/deck/eject', 'EMPTY');
-}
-
-
-sub get_state {
-	my $self=shift;
-	$self->{state} = undef;
-	$self->_wait_reply( '/deck/get_state' );
-	return $self->{state};
-}
-
-sub _state_handler {
+sub _channel_count_handler {
 	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
-	$userdata->{state}=$params[0];
+	$userdata->{channel_count}=$params[0];
 	return 0; # Success
 }
 
-sub get_position {
+sub get_channel_gain {
 	my $self=shift;
-	$self->{postion} = undef;
-	$self->_wait_reply( '/deck/get_position' );
-	return $self->{position};
+	my ($channel) = @_;
+	croak "Total number of channels is unknown" unless ($self->{channel_count});
+	$self->{channels}->{$channel}->{gain} = undef;
+	$self->_wait_reply( '/mixer/channel/get_gain', 'i', $channel );
+	return $self->{channels}->{$channel}->{gain};
 }
 
-sub _position_handler {
+sub set_channel_gain {
+	my $self=shift;
+	my ($channel,$gain) = @_;
+	croak "Total number of channels is unknown" unless ($self->{channel_count});
+	$self->_wait_reply( '/mixer/channel/set_gain', 'if', $channel, $gain );
+	return 1 if ($self->{channels}->{$channel}->{gain} == $gain);
+	return 0; # Failed
+}
+
+sub _channel_gain_handler {
 	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
-	$userdata->{position}=$params[0];
+	my ($channel, $gain) = @params;
+	
+	# Check channel exists
+	if (!exists $userdata->{channels}->{$channel}) {
+		$userdata->{channels}->{$channel} = {};
+	}
+	
+	# Store the gain
+	$userdata->{channels}->{$channel}->{gain} = $gain;
+	
 	return 0; # Success
 }
 
-sub get_filename {
+
+sub get_channel_label {
 	my $self=shift;
-	$self->{filename} = undef;
-	$self->_wait_reply( '/deck/get_filename' );
-	return $self->{filename};
+	my ($channel) = @_;
+	croak "Total number of channels is unknown" unless ($self->{channel_count});
+	$self->{channels}->{$channel}->{label} = undef;
+	$self->_wait_reply( '/mixer/channel/get_label', 'i', $channel );
+	return $self->{channels}->{$channel}->{label};
 }
 
-sub _filename_handler {
-	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
-	$userdata->{filename}=$params[0];
-	return 0; # Success
-}
-
-sub get_filepath {
+sub set_channel_label {
 	my $self=shift;
-	$self->{filepath} = undef;
-	$self->_wait_reply( '/deck/get_filepath' );
-	return $self->{filepath};
+	my ($channel,$label) = @_;
+	croak "Total number of channels is unknown" unless ($self->{channel_count});
+	$self->_wait_reply( '/mixer/channel/set_label', 'is', $channel, $label );
+	return 1 if ($self->{channels}->{$channel}->{label} == $label);
+	return 0; # Failed
 }
 
-sub _filepath_handler {
+sub _channel_label_handler {
 	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
-	$userdata->{filepath}=$params[0];
+	my ($channel, $label) = @params;
+	
+	# Check channel exists
+	if (!exists $userdata->{channels}->{$channel}) {
+		$userdata->{channels}->{$channel} = {};
+	}
+	
+	# Store the label
+	$userdata->{channels}->{$channel}->{label} = $label;
+	
 	return 0; # Success
 }
 
@@ -167,33 +159,9 @@ sub get_url {
 }
 
 
-sub _send {
-	my $self=shift;
-	my ($path, $desired, $typespec, @params) = @_;
-	my $state = undef;
-	
-	# Empty typespec if non specified
-	$typespec = '' unless (defined $typespec);
-	
-	# Try a few times
-	for(1..$ATTEMPTS) {
-		my $result = $self->{lo}->send( $self->{addr}, $path, $typespec, @params );
-		warn "Warning: failed to send '$path' OSC message.\n" if ($result<1);
-
-		# Check what state the player is in now
-		$state = $self->get_state();
-		last if ($state =~ /^$desired$/i);
-	}
-	
-	# Finally return true if we are in desired state
-	if ($state =~ /^$desired$/i) { return 1 }
-	else { return 0 }
-}
-
-
 sub _wait_reply {
 	my $self=shift;
-	my ($path) = @_;
+	my (@args) = @_;
 	my $bytes = 0;
 	
 	# Throw away any old incoming messages
@@ -203,9 +171,9 @@ sub _wait_reply {
 	for(1..$ATTEMPTS) {
 	
 		# Send Query
-		my $result = $self->{lo}->send( $self->{addr}, $path, '' );
+		my $result = $self->{lo}->send( $self->{addr}, @args );
 		if ($result<1) {
-			warn "Failed to send message ($path): ".$self->{addr}->errstr()."\n";
+			warn "Failed to send message (".join(',',@args)."): ".$self->{addr}->errstr()."\n";
 			sleep(1);
 			next;
 		}
@@ -234,114 +202,70 @@ __END__
 
 =head1 NAME
 
-Audio::JackMiniMix - Talk to JackMiniMix server using Object Oriented Perl
+Audio::JackMiniMix - Talk to JACK Mini Mixer using OSC
 
 =head1 SYNOPSIS
 
   use Audio::JackMiniMix;
 
-  my $mj = new Audio::JackMiniMix( 'osc.udp://jackminimix.example.net/' );
-  $mj->load( 'Playlist_A/mymusic.mp3' );
-  $mj->play();
+  my $mix = new Audio::JackMiniMix('osc.udp://host.example.net:3450/');
+  $mix->set_channel_gain( 1, -50 );
+  $mix->set_channel_gain( 2, -90 );
 
 
 =head1 DESCRIPTION
 
-The Audio::JackMiniMix module uses Net::LibLO to talk to a 
-JackMiniMix (MPEG Audio Deck) server. It has an Object Oriented style 
-API making it simple to control multiple decks from a single script.
-
+The Audio::JackMiniMix module uses Net::LibLO to talk to a JackMiniMix server. 
+It can be used to get and set the gains and labels for the channels of the mixer.
 
 =over 4
 
 =item B<new( oscurl )>
 
-Connect to JackMiniMix deck specified by C<oscurl>.
-A ping is sent to the JackMiniMix deck to check to see if it is there.
-If a reply is not recieved or there was an error then C<undef> is returned.
+Connect to JackMiniMix process specified by C<oscurl>.
+A channel_count() query is sent to the mixer, if the mixer does not 
+respond, then undef is returned.
 
-=item B<load( filename )>
 
-Send a message to the deck requesting that C<filename> is loaded.
-Note: it is up to the developer to check to see if the file was 
-successfully loaded, by calling the C<get_state()> method.
+=item B<channel_count()>
 
-Returns 1 if command was successfully received or 0 on error.
+Returns the number of stereo input channels that the mixer has.
 
-=item B<play()>
 
-Tell the deck to start playing the current track.
+=item B<get_channel_gain( channel )>
 
-Returns 1 if command was successfully received or 0 on error.
+Returns the gain (in decibels) of channel.
 
-=item B<pause()>
+C<channel> is the number of the channel (in range 1 to total number of channels).
 
-Tell the deck to pause the current track.
 
-Returns 1 if command was successfully received or 0 on error.
+=item B<set_channel_gain( channel, gain )>
 
-=item B<stop()>
+Sets the gain of channel C<channel> to C<gain> dB.
 
-Tell the deck to stop decoding and playback of the current track.
+C<channel> is the number of the channel (in range 1 to total number of channels).
 
-Returns 1 if command was successfully received or 0 on error.
+C<gain> is the gain (in decibels) to set the channel to (in range -90 to 90 dB).
 
-=item B<cue()>
 
-Tell the deck to start decoding from the cue point.
+=item B<get_channel_label( channel )>
 
-Returns 1 if command was successfully received or 0 on error.
+Returns the label (string) of channel number C<channel>.
 
-=item B<eject()>
+C<channel> is the number of the channel (in range 1 to total number of channels).
 
-Close the currect track loaded.
 
-Returns 1 if command was successfully received or 0 on error.
+=item B<set_channel_label( channel, label )>
 
-=item B<get_state()>
+Sets the label (string) of channel number C<channel> to C<label>.
 
-Returns the current state of the JackMiniMix deck.
-Returns one of the following strings:
+C<channel> is the number of the channel (in range 1 to total number of channels).
 
-   - PLAYING
-   - PAUSED
-   - READY
-   - LOADING
-   - STOPPED
-   - EMPTY
-   - ERROR
-   
-If no reply if received from the server or there is an error then 
-C<undef> is returned.
-
-=item B<get_position()>
-
-Returns the deck's position (in seconds) in the current track. 
-   
-If no reply if received from the server or there is an error then 
-C<undef> is returned.
-
-=item B<get_filename()>
-
-Returns the filename of the track currently loaded in the deck.
-The filename is stripped of its path and suffix.
-
-If no track is currently loaded then an empty string is returned.
-If no reply if received from the server or there is an error then 
-C<undef> is returned.
-
-=item B<get_filepath()>
-
-Returns the file path of the track currently loaded in the deck 
-(path will be in the same form as originally passed to load()).
-
-If no track is currently loaded then an empty string is returned.
-If no reply if received from the server or there is an error then 
-C<undef> is returned.
+C<label> is the new label for the channel.
 
 =item B<ping()>
 
-Pings the remote deck to see if it is there.
+Pings the mixer to see if it is there.
 
 Returns 1 if the server responds, or 0 if there is no reply.
 
