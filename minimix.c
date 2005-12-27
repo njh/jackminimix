@@ -34,10 +34,10 @@
 #include "db.h"
 
 
-#define		DEFAULT_CLIENT_NAME		"minimixer"
-#define		DEFAULT_CHANNEL_COUNT	(4)
-#define		CHANNEL_LABEL_LEN		(12)
-#define		FADE_RATE				(0.1)
+#define		DEFAULT_CLIENT_NAME		"minimixer"		// Default name of JACK client
+#define		DEFAULT_CHANNEL_COUNT	(4)				// Default number of input channels
+#define		CHANNEL_LABEL_LEN		(12)			// Max length of channel label strings
+#define		GAIN_FADE_RATE			(400.0f)	// Rate to fade at (dB per second)
 
 
 typedef struct {
@@ -113,21 +113,26 @@ int set_gain_handler(const char *path, const char *types, lo_arg **argv, int arg
 	lo_address src = lo_message_get_source( msg );
 	lo_server serv = (lo_server)user_data;
 	int chan = argv[0]->i;
-	float db = argv[1]->f;
+	float gain = argv[1]->f;
 	int result;
 
 	if (verbose) {
     	printf("Received channel gain change OSC message ");
-		printf(" (channel=%d, gain=%fdB)\n", chan, db);
+		printf(" (channel=%d, gain=%fdB)\n", chan, gain);
 	}
 	
+	// Make sure gain is in range
+	if (gain<-90) gain = -90;
+	if (gain>90) gain = 90;
+	
+	// Make sure channel number is in range
 	if (chan < 1 || chan > channel_count) {
 		fprintf(stderr,"Warning: channel number in OSC message is out of range.\n");
-		return 1;
+		return 0;
 	}
 	
 	// store the new value
-	channels[chan-1].desired_gain = db;
+	channels[chan-1].desired_gain = gain;
 
 	// Send back reply
 	result = lo_send_from( src, serv, LO_TT_IMMEDIATE, "/mixer/channel/gain", "if", chan, channels[chan-1].desired_gain );
@@ -251,8 +256,17 @@ int process_jack_audio(jack_nframes_t nframes, void *arg)
 		jack_default_audio_sample_t *in_right =
 			jack_port_get_buffer(channels[ch].right_port, nframes);
 		
-		// Adjust the gain ?
-		channels[ch].current_gain = channels[ch].desired_gain;
+		// Adjust the current gain towards desired gain ?
+		if (channels[ch].current_gain != channels[ch].desired_gain) {
+			float fade_step = (GAIN_FADE_RATE / jack_get_sample_rate( client )) * nframes;
+			if (channels[ch].current_gain < channels[ch].desired_gain-fade_step) {
+				channels[ch].current_gain += fade_step;
+			} else if (channels[ch].current_gain > channels[ch].desired_gain+fade_step) {
+				channels[ch].current_gain -= fade_step;
+			} else {
+				channels[ch].current_gain = channels[ch].desired_gain;
+			}
+		}
 		
 		// Mix the audio
 		mix_gain = db2lin( channels[ch].current_gain );
@@ -335,7 +349,7 @@ void init_jack( const char * client_name )
 		fprintf(stderr, "Cannot register output port 'out_right'.\n");
 		exit(1);
 	}
-
+	
 	// Register shutdown callback
 	jack_on_shutdown (client, shutdown_callback_jack, NULL );
 
@@ -344,6 +358,7 @@ void init_jack( const char * client_name )
 
 }
 
+static
 void connect_jack_port( jack_port_t *port, const char* in )
 {
 	const char* out = jack_port_name( port );
@@ -359,6 +374,7 @@ void connect_jack_port( jack_port_t *port, const char* in )
 
 
 // crude way of automatically connecting up jack ports
+static
 void autoconnect_jack_ports( jack_client_t* client )
 {
 	const char **all_ports;
