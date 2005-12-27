@@ -1,8 +1,8 @@
 AUTOMAKE_OPTIONS = foreign
 
-bin_PROGRAMS = jack-minimix
+bin_PROGRAMS = jackminimix
 
-jack_minimix_SOURCES = minimix.c db.h
+jackminimix_SOURCES = minimix.c db.h
 AM_CFLAGS = -Wall @JACK_CFLAGS@ @LIBLO_CFLAGS@
 AM_LDFLAGS = -lm @JACK_LIBS@ @LIBLO_LIBS@
 
