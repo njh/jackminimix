@@ -516,7 +516,13 @@ int main(int argc, char *argv[])
 	
 	// Check parameters
 	if (channel_count<1) usage();
-	
+		
+	// Validate parameters
+	if (quiet && verbose) {
+    	fprintf(stderr, "Can't be quiet and verbose at the same time.\n");
+    	usage();
+	}
+
 	// Dislay welcoming message
 	if (verbose) printf("Starting JackMiniMix version %s with %d channels.\n",
 							VERSION, channel_count);
