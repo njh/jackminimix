@@ -1,4 +1,7 @@
 Revision history for JackMiniMix perl interface
 
+0.02  Fri Apr 21 22:49:36 BST 2006
+	Added Makefile.PL
+
 0.01  Wed Dec 21 09:25:09 GMT 2005
 	First release

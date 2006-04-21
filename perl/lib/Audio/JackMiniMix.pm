@@ -14,7 +14,7 @@ use strict;
 
 use vars qw/$VERSION $ATTEMPTS/;
 
-$VERSION="0.01";
+$VERSION="0.02";
 $ATTEMPTS=5;
 
 

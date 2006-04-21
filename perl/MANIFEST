@@ -1,4 +1,5 @@
 Build.PL
+Makefile.PL
 Changes
 lib/Audio/JackMiniMix.pm
 MANIFEST
