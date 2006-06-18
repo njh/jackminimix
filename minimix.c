@@ -494,7 +494,7 @@ int main(int argc, char *argv[])
 	
 	
 	// Parse the command line arguments
-	while ((opt = getopt(argc, argv, "al:r:c:p:vqh")) != -1) {
+	while ((opt = getopt(argc, argv, "al:r:c:n:p:vqh")) != -1) {
 		switch (opt) {
 			case 'a':  autoconnect = 1; break;
 			case 'l':  connect_left = optarg; break;
