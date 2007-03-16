@@ -501,9 +501,9 @@ int main(int argc, char *argv[])
 			case 'r':  connect_right = optarg; break;
 			case 'c':  channel_count = atoi(optarg); break;
 			case 'n':  client_name = optarg; break;
+			case 'p':  osc_port = optarg; break;
 			case 'v':  verbose++; break;
 			case 'q':  quiet++; break;
-			case 'p':  osc_port = optarg; break;
 			default:
 				fprintf(stderr, "Unknown option '%c'.\n", (char)opt);
 			case 'h':
