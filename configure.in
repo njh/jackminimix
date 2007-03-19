@@ -5,14 +5,14 @@ AC_PREREQ(2.57)
 
 dnl ############# Initialization
 
-AC_INIT([jackminimix], [0.1], [njh@ecs.soton.ac.uk])
+AC_INIT([jackminimix], [0.2], [njh@ecs.soton.ac.uk])
 
-AC_CONFIG_SRCDIR( minimix.c )
+AC_CONFIG_SRCDIR([minimix.c])
 AC_CANONICAL_SYSTEM
 
 dnl Version 1.7 of automake is recommended
-AM_INIT_AUTOMAKE( 1.7 )
-AM_CONFIG_HEADER( config.h )
+AM_INIT_AUTOMAKE([1.7])
+AM_CONFIG_HEADER([config.h])
 
 
 

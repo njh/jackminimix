@@ -1,3 +1,11 @@
-Mon Jun 20 17:12:39 BST 2005 Nicholas Humfrey <njh@aelius.com>
 
-  * created project in Subversion
+2007-03-19  Nicholas Humfrey  <njh@aelius.com>
+
+	* Minor bug fix for setting the client name
+	* Released version 0.02
+
+
+2005-06-20  Nicholas Humfrey  <njh@aelius.com>
+
+	* created project in Subversion
+	* Released version 0.01
