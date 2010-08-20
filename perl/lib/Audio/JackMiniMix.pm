@@ -277,7 +277,7 @@ Returns the OSC URL of the JackMiniMix deck.
 
 L<Net::LibLO>
 
-L<http://www.ecs.soton.ac.uk/~njh/jackminimix/>
+L<http://www.aelius.com/njh/jackminimix/>
 
 =head1 AUTHOR
 
