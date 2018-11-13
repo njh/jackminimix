@@ -1,0 +1,14 @@
+language: c
+
+compiler:
+  - gcc
+
+before_install:
+  - sudo apt-get -qq update
+  - sudo apt-get install -y build-essential pkg-config automake autoconf
+  - sudo apt-get install -y liblo-dev libjack-jackd2-dev
+
+script:
+  - ./autogen.sh
+  - make
+  - make distcheck
