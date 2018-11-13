@@ -7,12 +7,12 @@ dnl ############# Initialization
 
 AC_INIT([jackminimix], [0.2], [njh@aelius.com])
 
-AC_CONFIG_SRCDIR([minimix.c])
+AC_CONFIG_SRCDIR([src/minimix.c])
 AC_CANONICAL_SYSTEM
 
 dnl Version 1.7 of automake is recommended
 AM_INIT_AUTOMAKE([1.7])
-AM_CONFIG_HEADER([config.h])
+AM_CONFIG_HEADER([src/config.h])
 
 
 
@@ -51,5 +51,6 @@ AC_CHECK_FUNCS( atexit usleep )
 
 dnl ############## Final Output
 
-AC_OUTPUT([Makefile])
+AC_CONFIG_FILES([Makefile src/Makefile])
 
+AC_OUTPUT
