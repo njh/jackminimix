@@ -55,11 +55,16 @@ echo "Generating configuration files for $package, please wait...."
 run_cmd() {
     echo "  running $* ..."
     if ! $*; then
-			echo failed!
-			exit 1
+      echo failed!
+      exit 1
     fi
 }
 
+
+# Because git doesn't support empty directories
+if [ ! -d "$srcdir/build-scripts" ]; then
+  mkdir "$srcdir/build-scripts"
+fi
 
 run_cmd aclocal
 run_cmd autoheader

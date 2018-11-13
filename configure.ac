@@ -8,6 +8,7 @@ dnl ############# Initialization
 AC_INIT([jackminimix], [0.2], [njh@aelius.com])
 
 AC_CONFIG_SRCDIR([src/minimix.c])
+AC_CONFIG_AUX_DIR(build-scripts) 
 AC_CANONICAL_SYSTEM
 
 dnl Version 1.7 of automake is recommended
