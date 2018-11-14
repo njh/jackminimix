@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/njh/jackminimix.svg?branch=master)](https://travis-ci.org/njh/jackminimix)
+
 JackMiniMix
 ===========
 
