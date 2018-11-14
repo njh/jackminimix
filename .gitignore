@@ -8,23 +8,22 @@
 *.log
 *.trs
 
+Makefile
+Makefile.in
+stamp-h1
+
 /aclocal.m4
-/autom4te.cache
+/autom4te.cache/*
 /build-scripts/*
 /config.cache
 /config.log
 /config.status
 /configure
-/libtool
 
-Makefile
-Makefile.in
-stamp-h1
+/README
+/NEWS
+/INSTALL
 
-README
-NEWS
-INSTALL
-
-src/config.h
-src/config.h.in
-src/jackminimix
+/src/config.h
+/src/config.h.in
+/src/jackminimix
