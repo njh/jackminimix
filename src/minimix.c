@@ -507,7 +507,7 @@ int main(int argc, char *argv[])
 			default:
 				fprintf(stderr, "Unknown option '%c'.\n", (char)opt);
 			case 'h':
-				usage( argv[0] );
+				usage();
 				break;
 		}
 	}
