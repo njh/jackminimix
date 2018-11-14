@@ -5,7 +5,7 @@ AC_PREREQ(2.57)
 
 dnl ############# Initialization
 
-AC_INIT([jackminimix], [0.2], [njh@aelius.com])
+AC_INIT([jackminimix], [0.2.1], [njh@aelius.com])
 
 AC_CONFIG_SRCDIR([src/minimix.c])
 AC_CONFIG_AUX_DIR(build-scripts) 
