@@ -48,6 +48,8 @@ typedef struct {
 	jack_port_t *right_port;		// Right Input Port
 } jmm_channel_t;
 
+float master_current_gain = 0.0f;  // decibels
+float master_desired_gain = 0.0f;  // decibels
 
 jack_port_t *outport[2] = {NULL, NULL};
 jack_client_t *client = NULL;
@@ -126,16 +128,19 @@ int set_gain_handler(const char *path, const char *types, lo_arg **argv, int arg
 	if (gain>90) gain = 90;
 	
 	// Make sure channel number is in range
-	if (chan < 1 || chan > channel_count) {
+	if (chan > channel_count) {
 		fprintf(stderr,"Warning: channel number in OSC message is out of range.\n");
 		return 0;
-	}
+	} else if (!chan) {  // if chan is 0
+    // store the new value
+    master_desired_gain = gain;
+  } else {
+    // store the new value
+    channels[chan-1].desired_gain = gain;
+  }
 	
-	// store the new value
-	channels[chan-1].desired_gain = gain;
-
 	// Send back reply
-	result = lo_send_from( src, serv, LO_TT_IMMEDIATE, "/mixer/channel/gain", "if", chan, channels[chan-1].desired_gain );
+	result = lo_send_from( src, serv, LO_TT_IMMEDIATE, "/mixer/channel/gain", "if", chan, gain );
 	if (result<1) fprintf(stderr, "Error: sending reply failed: %s\n", lo_address_errstr(src));
 
 	return 0;
@@ -241,12 +246,25 @@ int process_jack_audio(jack_nframes_t nframes, void *arg)
 		jack_port_get_buffer(outport[1], nframes);
 	jack_nframes_t n=0;
 	int ch;
+  float master_fade_step;
 	
 	// Put silence into the outputs
 	for ( n=0; n<nframes; n++ ) {
 		out_left[ n ] = 0;
 		out_right[ n ] = 0;
 	}
+
+  // Adjust the master_current gain towards master_desired gain
+  if (master_current_gain != master_desired_gain) {
+    master_fade_step = (GAIN_FADE_RATE / jack_get_sample_rate( client )) * nframes;
+    if (master_current_gain < master_desired_gain-master_fade_step) {
+      master_current_gain += master_fade_step;
+    } else if (master_current_gain > master_desired_gain+master_fade_step) {
+      master_current_gain -= master_fade_step;
+    } else {
+      master_current_gain = master_desired_gain;
+    }
+  }
 
 	// Mix each input into the output buffer
 	for ( ch=0; ch < channel_count ; ch++ ) {
@@ -269,7 +287,7 @@ int process_jack_audio(jack_nframes_t nframes, void *arg)
 		}
 		
 		// Mix the audio
-		mix_gain = db2lin( channels[ch].current_gain );
+		mix_gain = db2lin( channels[ch].current_gain+master_current_gain );
 		for ( n=0; n<nframes; n++ ) {
 			out_left[ n ] += (in_left[ n ] * mix_gain);
 			out_right[ n ] += (in_right[ n ] * mix_gain);
